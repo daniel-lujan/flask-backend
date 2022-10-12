@@ -1,1 +1,1 @@
-"web: gunicorn wsgi:app" 
+"web: guincorn app:app" 
