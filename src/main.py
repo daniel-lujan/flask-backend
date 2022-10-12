@@ -823,7 +823,6 @@ def remove_admin(_id: str = None) -> dict:
 
 @server.route("/test")
 def test():
-    test_add_clients(100)
     return "done"
 
 
