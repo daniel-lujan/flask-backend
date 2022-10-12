@@ -852,4 +852,4 @@ def test_add_clients(n: int):
 
 if __name__ == "__main__":
     scheduler.start()
-    server.run()
+    server.run(port=PORT)
