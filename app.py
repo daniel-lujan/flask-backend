@@ -850,3 +850,6 @@ def test_add_clients(n: int):
     clients.insert(*docs)
 
 
+if __name__ == "__main__":
+    scheduler.start()
+    server.run()
