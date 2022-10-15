@@ -137,6 +137,8 @@ server.register_blueprint(authentication)
 
 server.config["MONGO_URI"] = DATABASE_URI
 server.config['SECRET_KEY'] = SECRET_KEY
+server.config["SESSION_COOKIE_SAMESITE"] = "None"
+server.config["SESSION_COOKIE_SECURE"] = True
 CORS(server, supports_credentials=True)
 
 database.init_database(server)
