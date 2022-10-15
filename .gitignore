@@ -1,3 +1,5 @@
 
 # Exclude enviroment variables file
 .env
+
+/__pycache__
