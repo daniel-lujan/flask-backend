@@ -1,100 +1,14 @@
 from json import dumps
-from time import time
+from datetime import timedelta
 
-from flask import Flask, request
-from flask_apscheduler import APScheduler
+from flask import Flask, request, session
 from flask_cors import CORS
+from flask_login import login_required, current_user
 
 from constants import *
-from mongo_collection import Collection, FileCollection
-
-
-def logged(remote_address: str) -> bool:
-    """Checks whether an IP address is logged.
-
-    Args:
-        remote_address (`str`): IP address to check over.
-
-    Returns:
-        `bool`: `True` if logged, `False` otherwise.
-    """
-
-    try:
-        return logged_ips[request.environ.get("HTTP_X_REAL_IP", remote_address)]["logged"]
-    except KeyError:
-        return False
-
-
-def is_admin(user_id: str) -> bool:
-    """Checks whether an user has admin role.
-
-    Args:
-        user_id (`str`): User unique ID to check over.
-
-    Returns:
-        `bool`: `True` if admin, `False` otherwise.
-    """
-
-    try:
-        return users.find(user_id)["admin"]
-    except TypeError:
-        return False
-
-
-def route_is_private(route: str) -> bool:
-    """Checks whether a server route is private i.e. it can only
-    be accessed by logged users.
-
-    Args:
-        route (`str`): Route to check over.
-
-    Returns:
-        `bool`: `True` if route is private, `False` otherwise.
-    """
-
-    for r in PRIVATE_ROUTES:
-        if route.split("/")[1] == r:
-            return True
-
-    return False
-
-
-def route_is_only_admin(route: str) -> bool:
-    """Checks whether a route is only allowed for admin users.
-
-    Args:
-        route (`str`): Route.
-
-    Returns:
-        `bool`: _description_
-    """
-
-    return route.split("/")[1] == "admin"
-
-
-def timeout_check():
-    """Checks all logged users last requests and log out if they exceed log timeout.
-    """
-
-    for u in list(logged_ips.keys()):
-        if time() - logged_ips[u]["lastrequest"] > LOG_TIMEOUT:
-            del logged_ips[u]
-
-
-def get_user_id_by_ip(ip_addr: str) -> str | None:
-    """Gets user unique ID by given IP address.
-
-    Args:
-        ip_addr (`str`): IP address.
-
-    Returns:
-        `str` | `None`: User unique ID, `None` if IP address is not logged.
-    """
-
-    try:
-        return logged_ips[request.environ.get("HTTP_X_REAL_IP", ip_addr)]["user"]
-    except KeyError:
-        return None
+import database
+from auth import authentication, init_login_manager, role_required, valid_json_template
+from static import valid_doc_datatype, response
 
 
 def has_restrict_access() -> bool:
@@ -105,49 +19,9 @@ def has_restrict_access() -> bool:
         `bool`: `True` if it has restricted access, `False` otherwise.
     """
 
-    u_id = get_user_id_by_ip(request.remote_addr)
-
     for route in USER_RESTRICTED_ROUTES:
         if request.path.split("/")[1] == route:
-            return u_id and (not is_admin(u_id)) and request.method == "GET"
-
-
-def valid_doc_datatype(document: dict, template: dict, strict=True) -> bool:
-    """Checks document datatype validity i.e. the datatype of
-    every value in `document` match the corresponding one at
-    `template`.
-
-    Args:
-        document (`dict`): Document to validate.
-        template (`dict`): Datatype template
-        strict (`bool`, `optional`): `document` shall contain
-        every key of `template`. Defaults to `True`.
-
-    Returns:
-        `bool`: Document validity.
-    """
-
-    def strict_validation():
-        for field in template:
-            try:
-                if type(document[field]) is not template[field]:
-                    return False
-            except KeyError:
-                return False
-
-        return True
-
-    def non_strict_validation():
-        for field in template:
-            try:
-                if type(document[field]) is not template[field]:
-                    return False
-            except KeyError:
-                pass
-
-        return True
-
-    return strict_validation() if strict else non_strict_validation()
+            return current_user._id and (current_user.role != "admin") and request.method == "GET"
 
 
 def valid_new_user(info: dict) -> int:
@@ -206,7 +80,7 @@ def valid_username(username: str) -> bool:
     if len(username) not in range(*USERNAME_LENGTH):
         return False
 
-    return len(c for c in username if c not in USERNAME_ALLOWED_CHARS) == 0
+    return len(list(c for c in username if c not in USERNAME_ALLOWED_CHARS)) == 0
 
 
 def valid_password(password: str) -> bool:
@@ -225,121 +99,61 @@ def valid_password(password: str) -> bool:
     return True
 
 
-def set_admin(id: str, value: bool = True) -> dict:
+def set_admin(_id: str, value: bool = True) -> dict:
     """Sets `admin` attribute of an user to given value.
 
     Args:
         id (`str`): Unique user ID to operate over.
-        value (`bool`, `optional`): New `admin` attribute value. Defaults to True.
+        value (`bool`, `optional`): New `admin` attribute
+        value. Defaults to True.
 
     Returns:
         dict: Repsonse.
     """
 
-    user = users.find(id)
+    user = users.find(_id)
     if not user:
         return {
             "status": STATUS_NOT_FOUND_DOCUMENT,
             "response": None
         }
-    if user["_id"] == get_user_id_by_ip(request.remote_addr):
+    if user["_id"] == current_user._id:
         return {
             "status": STATUS_INVALID_JSON_DATA,
             "response": None
         }
 
-    user["admin"] = value
-    users.update(id, user)
+    user["role"] = "admin" if value else "normal"
+    users.update(_id, user)
 
     return {
         "status": STATUS_SUCCESS,
         "response": None
     }
 
-
-def authenticate(username: str, password: str) -> str | None:
-    """Authenticates user.
-
-    Args:
-        username (`str`): Username
-        password (`str`): Password
-
-    Returns:
-        `str` | `None`: Authenticated unique user ID, `None`
-        if not authenticated.
-    """
-    print("username:",username)
-    users_ = users.search("username", username, strict=True)
-    print(users_)
-
-    if users_ and users_[0]["password"] == password:
-        return users_[0]["_id"]
-    else:
-        return None
-
-
-def login(_id: str) -> None:
-    """Logs in current request's IP address.
-
-    Args:
-        _id (`str`): User unique ID to log in.
-    """
-
-    logged_ips[request.environ.get('HTTP_X_REAL_IP', request.remote_addr)] = {
-        "lastrequest": 0,
-        "user": _id,
-        "logged": True
-    }
-
-
-def get_void_response(status_code: int) -> dict:
-    """Generates void response.
-
-    Args:
-        status_code (`int`): Status code.
-
-    Returns:
-        `dict`: Response.
-    """
-
-    return {
-        "status": status_code,
-        "response": None
-    }
-
-
-logged_ips = {}
-
 server = Flask(__name__)
-server.config["MONGO_URI"] = MONGO_URI
-server.config["CUSTOM_ATTR_DB_NAME"] = DATABASE_NAME
-CORS(server)
 
-scheduler = APScheduler()
-scheduler.add_job(id="timeout", func=timeout_check,
-    trigger="interval", seconds=TIMEOUT_CHECK)
+server.register_blueprint(authentication)
 
-users = Collection(server, "users")
-clients = Collection(server, "clients")
-bills = Collection(server, "bills")
-files = FileCollection(server)
+server.config["MONGO_URI"] = DATABASE_URI
+server.config['SECRET_KEY'] = SECRET_KEY
+CORS(server, supports_credentials=True)
+
+database.init_database(server)
+
+users = database.users
+clients = database.clients
+bills = database.bills
+files = database.files
+
+init_login_manager(server)
 
 
 @server.before_request
-def before_req() -> None | dict:
-    """Runs before any request. Used for allowing/denying access
-    to the requested route.
-
-    Returns:
-        `None` | `dict`: `None` if access allowed, `dict` as server response otherwise.
-    """
-
-    if route_is_private(request.path) and not logged(request.remote_addr):
-        return get_void_response(STATUS_ACCESS_DENIED)
-
-    if route_is_only_admin(request.path) and not is_admin(get_user_id_by_ip(request.remote_addr)):
-        return get_void_response(STATUS_ACCESS_DENIED)
-
+def before_req():
+    session.permanent = True
+    server.permanent_session_lifetime = timedelta(minutes=LOG_TIMEOUT)
+    session.modified = True
 
 @server.after_request
 def after_req(res) -> str:
@@ -353,111 +167,20 @@ def after_req(res) -> str:
         `str`: Final response (JSON formatted).
     """
 
-    def update_log():
-        try:
-            logged_ips[request.environ.get(
-                'HTTP_X_REAL_IP', request.remote_addr)]["lastrequest"] = time()
-        except KeyError:
-            logged_ips[request.environ.get('HTTP_X_REAL_IP', request.remote_addr)] = {
-                "lastrequest": time(),
-                "user": None,
-                "logged": False
-            }
-
-    if has_restrict_access():
-        current_user = get_user_id_by_ip(
-            request.environ.get('HTTP_X_REAL_IP', request.remote_addr))
+    if current_user.is_authenticated and has_restrict_access():
         response = res.get_json()
         if type(response["response"]) is list:
             response["response"] = list(
-                doc for doc in response["response"] if doc["user"] == current_user)
+                doc for doc in response["response"] if doc["user"] == current_user._id)
         else:
-            if response["response"]["user"] != current_user:
-                return get_void_response(STATUS_ACCESS_DENIED)
+            if response["response"]["user"] != current_user._id:
+                return response(STATUS_ACCESS_DENIED)
         res.data = dumps(response)
-
-    update_log()
-
     return res
 
 
-@server.route("/hashsalt")
-def get_hash_salt() -> str:
-    """Gets hashsalt constant.
-
-    Returns:
-        `str`: Hashsalt.
-    """
-
-    return HASH_SALT
-
-
-@server.route("/log", methods=["POST"])
-def process_login() -> dict:
-    """Process login request.
-
-    Returns:
-        `dict`: Response
-    """
-
-    if not valid_doc_datatype(request.json, TEMPLATE_LOGIN):
-        print(1)
-        return get_void_response(STATUS_INVALID_JSON_DATA)
-
-    auth = authenticate(request.json["username"], request.json["password"])
-
-    if auth:
-        return {
-            "status": STATUS_SUCCESS,
-            "response": login(auth)
-        }
-
-    else:
-        print(2)
-        return get_void_response(STATUS_ACCESS_DENIED)
-
-
-@server.route("/log", methods=["DELETE"])
-def logout() -> dict:
-    """Logs out request's IP address.
-
-    Returns:
-        `dict`: Response
-    """
-    try:
-        del logged_ips[request.environ.get(
-            'HTTP_X_REAL_IP', request.remote_addr)]
-        return get_void_response(STATUS_SUCCESS)
-
-    except KeyError:
-        return get_void_response(STATUS_POINTLESS_REQUEST)
-
-
-@server.route("/log")
-def process_logged() -> dict:
-    """Retrieves request's IP address logged user's basic data.
-
-    Returns:
-        `dict`: Response
-    """
-
-    if logged(request.remote_addr):
-
-        user = users.find(get_user_id_by_ip(request.remote_addr))
-
-        return {
-            "status": STATUS_SUCCESS,
-            "response": {
-                "user": user["_id"],
-                "username": user["username"],
-                "admin": is_admin(get_user_id_by_ip(request.remote_addr))
-            }
-        }
-    else:
-        return get_void_response(STATUS_ACCESS_DENIED)
-
-
 @server.route("/clients", methods=["GET"])
+@login_required
 def get_clients() -> dict:
     """Retrieves the whole clients collection.
 
@@ -471,6 +194,7 @@ def get_clients() -> dict:
 
 
 @server.route("/clients/<cl_id>", methods=["GET"])
+@login_required
 def search_clients(cl_id: str = None) -> dict:
     """Searchs over the `clients.client.id` value.
 
@@ -486,10 +210,11 @@ def search_clients(cl_id: str = None) -> dict:
             "response": clients.search("id", cl_id)
         }
     else:
-        return get_void_response(STATUS_POINTLESS_REQUEST)
+        return response(STATUS_POINTLESS_REQUEST)
 
 
 @server.route("/client/<_id>", methods=["GET"])
+@login_required
 def get_client(_id: str = None) -> dict:
     """Finds and retrieve a client's data.
 
@@ -508,12 +233,13 @@ def get_client(_id: str = None) -> dict:
                 "response": res
             }
         else:
-            return get_void_response(STATUS_NOT_FOUND_DOCUMENT)
+            return response(STATUS_NOT_FOUND_DOCUMENT)
     else:
-        return get_void_response(STATUS_POINTLESS_REQUEST)
+        return response(STATUS_POINTLESS_REQUEST)
 
 
 @server.route("/client", methods=["POST"])
+@login_required
 def create_client() -> dict:
     """Inserts a client into the clients collection.
 
@@ -522,11 +248,11 @@ def create_client() -> dict:
     """
 
     if not valid_doc_datatype(request.json, TEMPLATE_INSERT_CLIENT):
-        return get_void_response(STATUS_INVALID_JSON_DATA)
+        return response(STATUS_INVALID_JSON_DATA)
 
     res = clients.insert({
         "id": request.json["id"],
-        "user": get_user_id_by_ip(request.environ.get('HTTP_X_REAL_IP', request.remote_addr)),
+        "user": current_user._id,
         "name": request.json["name"],
         "phone": request.json["phone"],
         "email": request.json["email"],
@@ -540,6 +266,7 @@ def create_client() -> dict:
 
 
 @server.route("/client/<_id>", methods=["DELETE"])
+@login_required
 def delete_client(_id: str = None) -> dict:
     """Deletes a client from the clients collection.
 
@@ -552,13 +279,15 @@ def delete_client(_id: str = None) -> dict:
 
     if _id:
         clients.delete(_id)
-        return get_void_response(STATUS_SUCCESS)
+        return response(STATUS_SUCCESS)
     else:
-        return get_void_response(STATUS_POINTLESS_REQUEST)
+        return response(STATUS_POINTLESS_REQUEST)
 
 
 @server.route("/updateclient/<_id>", methods=["POST"])
-def updateClient(_id: str = None) -> dict:
+@valid_json_template(TEMPLATE_UPDATE_CLIENT)
+@login_required
+def update_client(_id: str = None) -> dict:
     """Updates a client from the database.
 
     Args:
@@ -575,14 +304,15 @@ def updateClient(_id: str = None) -> dict:
             doc["email"] = request.json["email"]
             doc["address"] = request.json["address"]
             clients.update(_id, doc)
-            return get_void_response(STATUS_SUCCESS)
+            return response(STATUS_SUCCESS)
         else:
-            return get_void_response(STATUS_NOT_FOUND_DOCUMENT)
+            return response(STATUS_NOT_FOUND_DOCUMENT)
     else:
-        return get_void_response(STATUS_POINTLESS_REQUEST)
+        return response(STATUS_POINTLESS_REQUEST)
 
 
 @server.route("/file/<filename>")
+@login_required
 def get_file(filename):
     """Retrieves a file from the database.
 
@@ -597,6 +327,7 @@ def get_file(filename):
 
 
 @server.route("/file", methods=["POST"])
+@login_required
 def save_file() -> dict:
     """Saves a file into the database.
 
@@ -604,10 +335,11 @@ def save_file() -> dict:
         `dict`: Response
     """
     files.save(request.files["File"])
-    return get_void_response(STATUS_SUCCESS)
+    return response(STATUS_SUCCESS)
 
 
 @server.route("/bill", methods=["POST"])
+@login_required
 def add_bill():
     """Inserts a bill into the bills collection.
 
@@ -616,16 +348,16 @@ def add_bill():
     """
 
     if not valid_doc_datatype(request.json, TEMPLATE_INSERT_BILL):
-        return get_void_response(STATUS_INVALID_JSON_DATA)
+        return response(STATUS_INVALID_JSON_DATA)
 
     for b in bills.get():
         if b["ref"] == request.json["ref"]:
-            return get_void_response(STATUS_INVALID_JSON_DATA)
+            return response(STATUS_INVALID_JSON_DATA)
 
     client_id = request.json["client"]
     res = bills.insert({
         "ref": request.json["ref"],
-        "user": get_user_id_by_ip(request.environ.get('HTTP_X_REAL_IP', request.remote_addr)),
+        "user": current_user._id,
         "date": request.json["date"],
         "type": request.json["type"],
         "description": request.json["description"],
@@ -644,6 +376,7 @@ def add_bill():
 
 
 @server.route("/bills")
+@login_required
 def get_bills() -> dict:
     """Retrieves te whole `bills` collection.
 
@@ -658,6 +391,7 @@ def get_bills() -> dict:
 
 
 @server.route("/bills/<ref>")
+@login_required
 def search_bills(ref: str = None) -> dict:
     """Searchs over the `bills.bill.ref` value.
 
@@ -674,10 +408,11 @@ def search_bills(ref: str = None) -> dict:
             "response": bills.search("ref", ref)
         }
     else:
-        return get_void_response(STATUS_POINTLESS_REQUEST)
+        return response(STATUS_POINTLESS_REQUEST)
 
 
 @server.route("/bill/<id>", methods=["DELETE"])
+@login_required
 def delete_bill(id: str = None) -> dict:
     """Deletes a bill from the `bills` collection.
 
@@ -689,20 +424,21 @@ def delete_bill(id: str = None) -> dict:
     """
 
     if not id:
-        return get_void_response(STATUS_POINTLESS_REQUEST)
+        return response(STATUS_POINTLESS_REQUEST)
 
     doc = bills.find(id)
 
     if not doc:
-        return get_void_response(STATUS_NOT_FOUND_DOCUMENT)
+        return response(STATUS_NOT_FOUND_DOCUMENT)
 
     files.delete_by_filename(doc["file"])
     bills.delete(id)
 
-    return get_void_response(STATUS_SUCCESS)
+    return response(STATUS_SUCCESS)
 
 
 @server.route("/admin/users")
+@role_required("admin")
 def get_users() -> dict:
     """Retrieves the whole `users` collection. 
 
@@ -717,6 +453,7 @@ def get_users() -> dict:
 
 
 @server.route("/admin/users", methods=["POST"])
+@role_required("admin")
 def create_user() -> dict:
     """Inserts an user into the `users` collection.
 
@@ -727,14 +464,14 @@ def create_user() -> dict:
     code = valid_new_user(request.json)
 
     if code != STATUS_SUCCESS:
-        return get_void_response(code)
+        return response(code)
     res = users.insert({
         "username": request.json["username"],
         "password": request.json["password"],
-        "admin": request.json["admin"]
+        "role": request.json["role"]
     })
     if len(res) == 0:
-        return get_void_response(STATUS_INVALID_JSON_DATA)
+        return response(STATUS_INVALID_JSON_DATA)
 
     return {
         "status": STATUS_SUCCESS,
@@ -743,6 +480,7 @@ def create_user() -> dict:
 
 
 @server.route("/admin/resetpassword", methods=["POST"])
+@role_required("admin")
 def change_password() -> dict:
     """Updates an user's password.
 
@@ -751,20 +489,21 @@ def change_password() -> dict:
     """
 
     if not (valid_doc_datatype(request.json, TEMPLATE_CHANGE_PASSWORD)) and (valid_password(request.json["password"])):
-        return get_void_response(STATUS_INVALID_JSON_DATA)
+        return response(STATUS_INVALID_JSON_DATA)
 
     docs = users.search("username", request.json["username"], strict=True)
     if len(docs) == 0:
-        return get_void_response(STATUS_NOT_FOUND_DOCUMENT)
+        return response(STATUS_NOT_FOUND_DOCUMENT)
 
     new_doc = docs[0]
     _id = new_doc["_id"]
     new_doc["password"] = request.json["password"]
     users.update(_id, new_doc)
-    return get_void_response(STATUS_SUCCESS)
+    return response(STATUS_SUCCESS)
 
 
 @server.route("/admin/changepassword", methods=["POST"])
+@role_required("admin")
 def change_self_password() -> dict:
     """Changes the current request IP address logged
     user's password.
@@ -773,21 +512,22 @@ def change_self_password() -> dict:
         `dict`: Response
     """
 
-    user = users.find(get_user_id_by_ip(request.remote_addr))
+    user = users.find(current_user._id)
 
     if request.json["current"] != user["password"]:
-        return get_void_response(STATUS_ACCESS_DENIED)
+        return response(STATUS_ACCESS_DENIED)
 
     if not valid_password(request.json["new"]):
-        return get_void_response(STATUS_INVALID_JSON_DATA)
+        return response(STATUS_INVALID_JSON_DATA)
 
     user["password"] = request.json["new"]
     users.update(user["_id"], user)
 
-    return get_void_response(STATUS_SUCCESS)
+    return response(STATUS_SUCCESS)
 
 
 @server.route("/admin/addadmin/<_id>")
+@role_required("admin")
 def add_admin(_id: str = None) -> dict:
     """Sets to true the `users.user.admin` value.
 
@@ -799,12 +539,13 @@ def add_admin(_id: str = None) -> dict:
     """
 
     if not _id:
-        return get_void_response(STATUS_POINTLESS_REQUEST)
+        return response(STATUS_POINTLESS_REQUEST)
 
     return set_admin(_id)
 
 
 @server.route("/admin/removeadmin/<_id>")
+@role_required("admin")
 def remove_admin(_id: str = None) -> dict:
     """Sets to `False` the `users.user.admin` value.
 
@@ -816,14 +557,16 @@ def remove_admin(_id: str = None) -> dict:
     """
 
     if not _id:
-        return get_void_response(STATUS_POINTLESS_REQUEST)
+        return response(STATUS_POINTLESS_REQUEST)
 
-    return set_admin(id, False)
+    return set_admin(_id, False)
 
 
 @server.route("/test")
+@login_required
 def test():
     return "done"
+
 
 
 def test_add_clients(n: int):
@@ -851,5 +594,4 @@ def test_add_clients(n: int):
 
 
 if __name__ == "__main__":
-    scheduler.start()
-    server.run(port=PORT)
+    server.run(debug=True,port=PORT)

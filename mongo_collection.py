@@ -60,8 +60,8 @@ class FileCollection():
         
 class Collection():
 
-    def __init__(self, flask_server, name):
-        self.__mongo_coll = MongoClient(flask_server.config["MONGO_URI"]).get_database(flask_server.config["CUSTOM_ATTR_DB_NAME"])[name]
+    def __init__(self, flask_server, name: str):
+        self.__mongo_coll = PyMongo(flask_server).db[name]
     
     def get(self) -> list[dict]:
         """Gets all documents stored in the collection.
@@ -103,7 +103,7 @@ class Collection():
         try:
             doc = self.__mongo_coll.find_one({"_id":ObjectId(id)})        
             doc["_id"] = str(doc["_id"])
-        except KeyError:
+        except (TypeError, KeyError):
             doc = None
 
         return doc
@@ -156,4 +156,3 @@ class Collection():
             pass
         
         self.__mongo_coll.replace_one({"_id":ObjectId(id)}, info)
-
