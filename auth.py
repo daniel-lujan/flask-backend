@@ -8,7 +8,15 @@ from constants import *
 from models import User
 from static import response, valid_doc_datatype
 
-def role_required(*roles:str):
+
+def role_required(*roles: str):
+    """Function decorator. Checks whether
+     current user matches with required role.
+
+     This decorator is expected to be used
+     inside a request context.
+    """
+
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -19,7 +27,20 @@ def role_required(*roles:str):
         return wrapper
     return decorator
 
-def valid_json_template(template:dict, strict: bool = True):
+
+def valid_json_template(template: dict, strict: bool = True):
+    """Function decorator. Checks current `request.json`
+    validity by comparing it with a `template`.
+
+    This decorator is expected to be used
+    inside a request context.
+
+    Args:
+        template (dict): Template which `request.json` is
+        compared.
+        strict (bool, optional): Strict comparison. Defaults to True.
+    """
+
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -31,8 +52,9 @@ def valid_json_template(template:dict, strict: bool = True):
         return wrapper
     return decorator
 
-def authenticate(username:str, password:str):
-    """Authenticates user.
+
+def authenticate(username: str, password: str) -> str | None:
+    """Authenticates user's credentials.
 
     Args:
         username (`str`): Username
@@ -53,9 +75,19 @@ def authenticate(username:str, password:str):
     else:
         return None
 
-authentication = Blueprint("authentication",__name__)
 
-def init_login_manager(server):
+authentication = Blueprint("authentication", __name__)
+
+
+def init_login_manager(server) -> None:
+    """Initializes a login manager for `~flask.Flask`
+    app. Also sets up `user_loader` and `unauthorized_handler`
+    functions.
+
+    Args:
+        server (`~flask.Flask`): Flask app.
+    """
+
     login_manager = LoginManager(server)
 
     @login_manager.user_loader
@@ -74,44 +106,54 @@ def init_login_manager(server):
 
 
 @authentication.route("/auth/log", methods=["POST"])
-def login():
-    
-    if not valid_doc_datatype(request.json, TEMPLATE_LOGIN):
-        return response(STATUS_INVALID_JSON_DATA)
+@valid_json_template(TEMPLATE_LOGIN)
+def login() -> dict:
+    """Authenticates and logs a user in.
+
+    Returns:
+        `dict`: Response
+    """
 
     auth = authenticate(request.json["username"],
-        request.json["password"])
+                        request.json["password"])
 
     if auth is None:
         return response(STATUS_ACCESS_DENIED)
-    
+
     user_info = database.users.find(auth)
 
     login_user(User(**user_info), remember=False)
 
     return response(STATUS_SUCCESS, {
-            "role": user_info["role"]
-        })
+        "role": user_info["role"]
+    })
 
 
 @authentication.route("/auth/log", methods=["DELETE"])
 @login_required
-def logout():
+def logout() -> dict:
+    """Logs current user out.
+
+    Returns:
+        dict: Response
+    """
+
     logout_user()
+
     return response(STATUS_SUCCESS)
+
 
 @authentication.route("/auth/log")
 @login_required
-def log():
-    return {
-        "status": STATUS_SUCCESS,
-        "response": {
-            "user": current_user._id,
-            "username": current_user.username,
-            "role": current_user.role
-        }
-    }
+def log() -> dict:
+    """Retrieves current user's data.
 
-@authentication.route("/auth/test")
-def test():
-    return "done"
+    Returns:
+        dict: Response
+    """
+
+    return response(STATUS_SUCCESS, {
+        "user": current_user._id,
+        "username": current_user.username,
+        "role": current_user.role
+    })
