@@ -2,6 +2,8 @@
 # Exclude enviroment variables file
 .env
 
-/__pycache__
+/__pycache__/*
+
+*.pyc
 
 /venv

@@ -2,7 +2,7 @@ from json import dumps
 from datetime import timedelta
 from os.path import splitext
 
-from flask import Flask, request, session
+from flask import Flask, request, session, abort
 from flask_cors import CORS
 from flask_login import login_required, current_user
 
@@ -398,9 +398,9 @@ def get_file(filename: str = None):
         if files.file_exists(filename):
             return files.get(filename)
         else:
-            return response(STATUS_DOCUMENT_NOT_FOUND)
+            abort(404)
     else:
-        return response(STATUS_POINTLESS_REQUEST)
+        abort(400)
 
 
 @server.route("/file", methods=["POST"])
@@ -419,8 +419,7 @@ def save_file() -> dict:
         files.save(request.files["File"])
         return response(STATUS_SUCCESS)
 
-    except (TypeError, KeyError) as e:
-        print(e)
+    except (TypeError, KeyError):
         return response(STATUS_INVALID_REQUEST)
 
 
