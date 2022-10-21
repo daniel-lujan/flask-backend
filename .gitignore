@@ -6,4 +6,6 @@
 
 *.pyc
 
+testing.py
+
 /venv

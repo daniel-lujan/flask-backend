@@ -1,19 +1,41 @@
 from flask_pymongo import PyMongo, ObjectId
+from uuid import uuid4
+from os.path import splitext
 
+def get_random_filename(extension:str="") -> str:
+    """Generates random filename.
+
+    Returns:
+        str: _description_
+    """
+
+    return str(uuid4())+extension
 
 class FileCollection():
 
     def __init__(self, flask_server):
         self.__mongo_conn = PyMongo(flask_server)
 
-    def save(self, file) -> None:
+    def save(self, file, default_filename:bool = False) -> str:
         """Saves a file into the database.
 
         Args:
             file (`~werkzeug.datastructures.FileStorage`): File to be saved.
+            default_filename (`bool`): Use file's own filename. If `False`,
+            it will store the file with a random-generated name. Default to
+            `False`
+        
+        Returns:
+            `str`: Stored filename.
         """
 
-        self.__mongo_conn.save_file(file.filename, file, md5="")
+        if default_filename:
+            self.__mongo_conn.save_file(file.filename, file, md5="")
+            return file.filename
+        else:
+            filename = get_random_filename(splitext(file.filename)[1])
+            self.__mongo_conn.save_file(filename, file, md5="")
+            return filename
 
     def get(self, filename: str):
         """Gets a file from the database.
