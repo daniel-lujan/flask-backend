@@ -13,8 +13,8 @@
 - **auth.py:** `Flask Blueprint` for user authentication and permission processes.
 - **constants.py:** App settings, enviroment variables loading, request templates, status codes, etc.
 - **database.py:** Database initialization. Conection to collections and app settings loading.
-- **models.py:** Classes used for `flask-login` and `auth.py` for user authentication and data loading.
-- **mongo_collection.py:** Connection classes to `MongoDB ` database/collections.
+- **models.py:** Classes used by `flask-login` and `auth.py` for user authentication and data loading.
+- **mongo_collection.py:** Connection classes to `MongoDB` database/collections.
 - **static.py:** Other.
 ### Configuration files
 - **Procfile:** `Heroku Dyno` process configuration.
